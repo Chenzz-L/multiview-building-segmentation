@@ -1,0 +1,2 @@
+class BaseDecodeHead():
+    pass

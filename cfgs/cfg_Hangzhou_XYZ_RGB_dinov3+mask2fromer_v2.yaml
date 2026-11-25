@@ -1,0 +1,192 @@
+model:
+  in_channels: 3
+  out_channels: 1
+  type: EncoderDecoder
+  encoder:
+    type: DINOv3AdapterWrapper
+    model_name: vit_large
+    img_size: 1024
+    patch_size: 16
+    out_indices:
+    - 5
+    - 11
+    - 17
+    - 23
+    checkpoint_path: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/dinov3_vitl16_pretrain_sat493m.pth
+  neck:
+    type: ViTAdapterNeck
+    in_channels: 1024
+    embed_dim: 1024
+    img_size: 1024
+    patch_size: 16
+    in_chans: 4
+    interaction_indexes:
+    - 0
+    - 1
+    - 2
+    - 3
+    with_cffn: true
+    cffn_ratio: 0.25
+  pixel_decoder:
+    transformer_dropout: 0.2
+    transformer_nheads: 8
+    transformer_dim_feedforward: 1024
+    transformer_enc_layers: 6
+    conv_dim: 256
+    mask_dim: 256
+    norm: GN
+    transformer_in_features:
+    - res3
+    - res4
+    - res5
+    common_stride: 2
+  decoder:
+    type: MultiScaleMaskedTransformerDecoder
+    in_channels: 256
+    num_classes: 1
+    hidden_dim: 256
+    mask_dim: 256
+    num_queries: 50
+    nheads: 8
+    dim_feedforward: 2048
+    dec_layers: 6
+    pre_norm: false
+    enforce_input_project: false
+  out_class: 1
+optimizer:
+  lr: 0.0001
+  type: AdamW
+  weight_decay: 0.1
+lr_scheduler:
+  type : CosineAnnealingLR
+  T_max: 200
+  eta_min: 0
+loss:
+#   - type: SigmoidDiceLoss
+#   - type: BCEWithLogitsLoss
+  # - type: focalloss
+metric:
+  - type: F1Score
+    params:
+     task : binary
+  - type: JaccardIndex
+    params:
+     task: binary
+     threshold: 0.5
+  - type : Recall
+    params:
+     task : binary
+callback:
+  - type: ModelCheckpoint
+    params:
+      monitor: coco_AP
+      mode: max
+      dirpath: /path/to/project/experiment/MVMapper/Hangzhou_XYZ_DSM_newinstencedata_v2_testdata6_1024_dinov3_pixel_decoder_mask2former_Lora_lr1e-4_adpetv2_test3/train/checkpoints
+      filename: '{epoch}-{val_loss:.4f}-{coco_AP:.4f}-{val_BinaryF1Score_epoch:.4f}'
+      save_top_k: 2
+      save_on_train_epoch_end: False
+  # - type: EarlyStopping
+  #   params:
+  #     monitor: val_BinaryF1Score_epoch
+  #     mode: max
+  #     patience: 10
+  # - type: FreezeLayerCallback
+  #   params:
+  #     freezelayers_cfg: [encoder]
+logger:
+  - type: CSVLogger
+    params:
+     save_dir: &save_dir /path/to/project/experiment/MVMapper/Hangzhou_XYZ_DSM_newinstencedata_v2_testdata6_1024_dinov3_pixel_decoder_mask2former_Lora_lr1e-4_adpetv2_test3/train/logs
+     name: &name Hangzhou_DSM
+     flush_logs_every_n_steps: 10
+     version: csv
+  - type: TensorBoardLogger
+    params:
+      save_dir: *save_dir
+      name: *name
+      version: tensorbaord
+trainer:
+  accelerator: gpu
+  devices: [4,5]
+  strategy: ddp_find_unused_parameters_true
+  # precision: 16-mixed
+  enable_checkpointing: false
+  max_epochs: 200
+  check_val_every_n_epoch: 1
+  # use_distributed_sampler: True
+  # sync_batchnorm: True
+  default_root_dir: /path/to/project/experiment/MVMapper/Hangzhou_XYZ_DSM_newinstencedata_v2_testdata6_1024_dinov3_pixel_decoder_mask2former_Lora_lr1e-4_adpetv2_test3
+  fast_dev_run: False
+  gradient_clip_val: 0.05  # 或者 0.1，DINOv3/Mask2Former 建议设小一点
+  gradient_clip_algorithm: "norm"
+
+TRAIN_DATALOADER_CFG:
+  batch_size: 3
+  # data_type: train
+  num_workers: 4
+  shuffle: true
+  persistent_workers : True
+  pin_memory: True 
+  # collate_fn: rgb_dsm_collate
+TRAIN_DATASET_CFG:
+  augmentation: true
+  standardization: true
+  data_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/Data_for_Try/test_6/samples_crop_instence_1024_1024_800
+  type: Dataset_RGB_DSM_COCO_Simple_partdata
+  dsm_dir_name: dsm
+  dsm_none_value: -99999
+  image_dir_name: image
+  json_name: train_0_1_2_4_7.json
+  split_k: 6
+  label_dir_name: label
+  mask: true
+  # set_dir: false
+  # set_stat: false
+  # clip: [0,40]
+  geom_pipeline:
+    - type: HorizontalFlip
+      p: 0.5
+    - type: RandomResizedCrop
+      height: 1024
+      width: 1024
+      scale: [0.8, 1.0]
+      ratio: [0.75, 1]
+      p: 0.5
+    - type: RandomRotate90
+      p: 0.5
+  rgb_pipeline:
+    - type: ColorJitter
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.05
+      p: 0.5
+  # - num_holes: 3
+    # type: Cutout 
+    # max_h_size: 32
+    # max_w_size: 32
+    # p: 0.5
+VAL_DATALOADER_CFG:
+  batch_size: 3
+  # data_type: test
+  shuffle: false
+  persistent_workers : True
+  num_workers: 4
+  # collate_fn: rgb_dsm_collate
+  # drop_last: True
+VAL_DATASET_CFG:
+  augmentation: false
+  standardization: true
+  data_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/Data_for_Try/test_6/samples_crop_instence_1024_1024_800
+  data_pipeline: Null
+  type: Dataset_RGB_DSM_COCO_Simple_partdata
+  dsm_dir_name: dsm
+  dsm_none_value: -99999
+  image_dir_name: image
+  json_name: test_3_5_6.json
+  label_dir_name: label
+  split_k: 2
+  mask: true
+  # set_dir: false
+  # set_stat: false
+  # clip: [0,8]

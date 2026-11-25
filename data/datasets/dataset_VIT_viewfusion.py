@@ -1,0 +1,265 @@
+# -*- coding: utf-8 -*-
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+import numpy as np
+import pandas as pd
+
+from data.datasets.dataset_Base import BaseDataset
+from data.datasets.data_utils import expand_data_2_BCHW,expand_datalist_2_BCHW
+from data.transforms.augmentation import *
+from data.datasets.dataste_support import *
+from utils.make_samples import *
+
+
+__all__ = ['Dataset_VIT_ViewFusion']
+
+view_name_to_index = {
+    'SV2-01_20240525_L1B0001033134_6042400160090004_01-PAN1': 1,
+    'SV2-01_20240525_L1B0001033134_6042400160090004_01-PAN2': 2,
+    'SV2-01_20240525_L1B0001033135_6042400160090005_01-PAN1': 3,
+    'SV2-01_20240525_L1B0001033135_6042400160090005_01-PAN2': 4,
+    'SV2-01_20240525_L1B0001045521_6042400500030005_01-PAN1': 5,
+    'SV2-01_20240525_L1B0001045521_6042400500030005_01-PAN2': 6,
+    'SV2-01_20240525_L1B0001045522_6042400500030006_01-PAN1': 7,
+    'SV2-01_20240525_L1B0001045522_6042400500030006_01-PAN2': 8,
+    'SV2-01_20240529_L1B0001037856_6042400160090008_01-PAN1': 9,
+    'SV2-01_20240529_L1B0001037856_6042400160090008_01-PAN2': 10,
+    'SV2-01_20240529_L1B0001045518_6042400500030002_01-PAN1': 11,
+    'SV2-01_20240529_L1B0001045518_6042400500030002_01-PAN2': 12,
+    'SV2-01_20240615_L1B0001061685_6042400500020001_01-PAN1': 13,
+    'SV2-01_20240615_L1B0001061685_6042400500020001_01-PAN2': 14,
+    'SV2-01_20240615_L1B0001061686_6042400500020002_01-PAN1': 15,
+    'SV2-01_20240615_L1B0001061686_6042400500020002_01-PAN2': 16,
+    'SV2-02_20240617_L1B0001064587_6042400500020004_01-PAN1': 17,
+    'SV2-02_20240617_L1B0001064587_6042400500020004_01-PAN2': 18,
+    'SV2-02_20240617_L1B0001064588_6042400500020005_01-PAN1': 19,
+    'SV2-02_20240617_L1B0001064588_6042400500020005_01-PAN2': 20,
+}
+
+
+@regist_dataset()
+class Dataset_VIT_ViewFusion(BaseDataset):
+    def __init__(self,
+                 img_data_dir: str,
+                #  grid_dir: str,
+                 xyz_data_dir: str,
+                 xyz_img_pair_file: str,
+                 grid_scale:float,
+                 augmentation: bool = False,
+                 standardization: bool = True,
+                 img_dsm_none_value: float = 0,
+                 xyz_dsm_none_value: float = 0,
+                 mask=False,
+                 clip: list = None,
+                 data_pipeline=None,
+                 indices_name='indices'):
+        assert os.path.exists(img_data_dir)
+        assert os.path.exists(xyz_data_dir)
+        # assert os.path.exists(grid_dir)
+        self.img_data_dir = img_data_dir
+        self.xyz_data_dir=xyz_data_dir
+        # self.gird_dir = grid_dir
+        self._image_dir_name = 'image'
+        self._label_dir_name = 'label'
+        self._dsm_dir_name = 'dsm'
+        
+        self.augmentation = augmentation
+        # get indices, return pd.DataFrame, a python dictionary
+        # self.indices = pd.read_csv(os.path.join(img_data_dir, 'indices.csv'))
+        self.indices = pd.read_csv(os.path.join(img_data_dir, indices_name+'.csv'))
+        # calculate statics: mean value, standard
+        self.standardization = standardization
+        if standardization:
+            self.img_stat_file = self.img_data_dir + '/' + 'stat_binary.txt'
+            self.xyz_stat_file = self.xyz_data_dir + '/' + 'stat_binary.txt'
+            self.img_stat_data=self.read_stat(self.img_stat_file)
+            self.xyz_stat_data=self.read_stat(self.xyz_stat_file)
+
+        self.ids = self.indices['name'].tolist()
+
+        self.img_dsm_none_value = img_dsm_none_value
+        self.xyz_dsm_none_value = xyz_dsm_none_value
+        self.mask = mask
+        # self.pair_file=pair_file
+        self.views_meta = self.build_pair()
+
+        self.xyz_img_dict = self.read_xyz_img_pair_file(xyz_img_pair_file)
+        self.grid_scale = grid_scale
+        if clip is not None:
+            assert len(clip) == 2
+            self.views_meta = self.views_meta[clip[0]:clip[1]]
+
+        if augmentation and data_pipeline:
+            if not 'ToFloat' in data_pipeline[0].values():# 自定义ToFloat
+                data_pipeline.insert(0,{'type':'ToFloat','max_value':255})
+            self.data_pipeline=build_agument_pipeline(data_pipeline,True)
+            self.augmentation = augmentation
+        else:
+            self.augmentation=False
+        
+    def __len__(self):
+        return len(self.views_meta)
+
+    def __getitem__(self, idx):
+        imgs = []
+        view_imgs = {}
+        view_index = []
+        mask = []
+        # read xyz data
+        image_name = os.path.splitext(os.path.basename(self.views_meta[idx][0]))[0]
+        xyz_num = image_name.split("_")[-3]
+        xyz_num = xyz_num.split("-")[-1]
+        num = image_name.split("_")[-2:]
+        num = "_".join(num)
+        xyz_suffix=self.xyz_img_dict[xyz_num] + "_" + num + ".tif"
+        file = os.path.join(self.xyz_data_dir, self._label_dir_name,xyz_suffix)
+        xyz_label_data=self.open(file)
+        
+        file = os.path.join(self.xyz_data_dir, self._image_dir_name,xyz_suffix)
+        xyz_image_data=self.open(file,channel_sum=1,)
+        view_index.append(0)
+        if self.augmentation and self.data_pipeline!=None:
+            xyz_image_data=seg_augmentation_imageonly(xyz_image_data,self.data_pipeline)
+        
+        file = os.path.join(self.xyz_data_dir, self._dsm_dir_name,xyz_suffix)
+        xyz_dsm_data=self.open(file, mask=self.mask,mask_value=self.xyz_dsm_none_value,none_value=self.xyz_dsm_none_value)
+        
+        xyz_image_data = np.concatenate((xyz_image_data, xyz_dsm_data), axis=0)
+        imgs.append(xyz_image_data)
+        mask.append(True)
+        
+        for j, file in enumerate(self.views_meta[idx]):
+            # read image
+            image_data=self.open(os.path.join(self.img_data_dir,self._image_dir_name, '%s' % file),
+                            channel_sum=1,)
+            
+            if self.augmentation and self.data_pipeline!=None:
+                image_data=seg_augmentation_imageonly(image_data,self.data_pipeline)
+            
+            # read dsm data
+            dsm_data=self.open(os.path.join(self.img_data_dir,self._dsm_dir_name, '%s' % file),
+                                mask=self.mask,mask_value=self.img_dsm_none_value,none_value=self.img_dsm_none_value)
+
+            image_data = np.concatenate((image_data, dsm_data), axis=0)
+            view_name = "-".join(file.split('-')[:-1])
+            # view_index.append(view_name_to_index[view_name])
+            # read label
+            # label_data=self.open(os.path.join(self.img_data_dir,self._label_dir_name, '%s' % file))
+
+            # # read grid
+            # grid_data=self.open(os.path.join(self.gird_dir, file),scale=self.grid_scale)
+            view_imgs[view_name_to_index[view_name]] = image_data
+            # grid_datas.append(grid_data)
+            # imgs.append(image_data)
+            # label_datas.append(label_data)
+
+        for i, filename in enumerate(view_name_to_index):
+            i = i + 1
+            if i in view_imgs:
+                imgs.append(view_imgs[i])
+                view_index.append(i)
+                mask.append(True)
+            else:
+                x = np.zeros((2,224,224))
+                imgs.append(x)
+                view_index.append(view_name_to_index[filename])
+                mask.append(False)
+        expand_datalist_2_BCHW(imgs)
+        # expand_datalist_2_BCHW(label_datas)
+        # expand_datalist_2_BCHW(grid_datas)
+        # xyz_label_data = expand_data_2_BCHW(xyz_label_data)
+        # xyz_image_data = expand_data_2_BCHW(xyz_image_data)
+        
+
+        img=np.concatenate(imgs,axis=0)
+        # grid_data = np.concatenate(grid_datas,axis=0)
+        # label_data = np.concatenate(label_datas, axis=0)
+        # grid_data = grid_data.transpose((0, 2, 3, 1))
+        return img, xyz_label_data, view_index, mask
+
+
+if __name__=='__main__':
+
+    import pandas as pd
+    from data.datasets.data_utils import fusion_collate,dataset_collate_padding
+    import torch.utils.data as tdata 
+    from osgeo import gdal
+    from utils.raster_io import fastly_save_image
+    data_pipeline=[{'type' : 'RandomBrightnessContrast' , 'p' : 0.5},
+                   {'type': 'Flip' , 'p' : 0.5},
+                   {'type' : 'ColorJitter'}]
+    dataset=Dataset_VIT_ViewFusion("/path/to/user/NAS/gwx/DeepL/Melbourne/IMG_MV/train/samples",
+                                "/path/to/user/NAS/gwx/DeepL/Melbourne/IMG_MV/train/samples/grid_none",
+                                "/path/to/user/NAS/gwx/DeepL/Melbourne/XYZ/train/samples",
+                                "/path/to/user/NAS/gwx/DeepL/Melbourne/XYZ_xy_name_map.txt",
+                                1,augmentation=False,data_pipeline=data_pipeline,standardization=True,
+                                img_dsm_none_value=-99999,xyz_dsm_none_value=-99999,)
+                                # ,indices_name='singleview_indices')
+
+    data_loader = tdata.DataLoader(dataset=dataset, batch_size=1,
+                                   num_workers=0, shuffle=True,  # cfg.shuffle,
+                                   pin_memory=True, collate_fn=dataset_collate_padding)
+
+    for data in dataset:
+        img_x,xyz_x,grid,image_label,y2=data
+#         if xyz_x is None:
+#             continue
+#         else:
+#             fastly_save_image(img_x,'/model/zhangpl/mvmaper/image1.tif',gdal_type=gdal.GDT_Float32)
+#             fastly_save_image(image_label,'/model/zhangpl/mvmaper/label1.tif',gdal_type=gdal.GDT_Float32)
+    # batch_iterator=iter(data_loader)
+    # for batch in batch_iterator:
+    #     img_x,xyz_x,grid,image_label,y2,batch_info=batch
+        
+        # fastly_save_image(img_x[0].squeeze(0).numpy(),'/path/to/user/NAS/gwx/code/seg_framer_v2/image.tif',gdal_type=gdal.GDT_Float32)
+        # fastly_save_image(xyz_x[0].squeeze(0).numpy(),'/path/to/user/NAS/gwx/code/seg_framer_v2/image22.tif',gdal_type=gdal.GDT_Float32)
+        # fastly_save_image(image_label[0].squeeze(0).numpy(),'/path/to/user/NAS/gwx/code/seg_framer_v2/label.tif',gdal_type=gdal.GDT_Float32)
+        # break
+        
+#         if len(img_x)==3:# and np.sum(image_label[0].squeeze(0).numpy())/(512*512)>0.4:
+#             for i in range(img_x.shape[0]):
+#                 fastly_save_image(img_x[i,0:3].numpy()*255,'/path/to/user/NAS/gwx/code/seg_framer_v2/image'+str(i)+'.tif',gdal_type=gdal.GDT_Float32)
+#                 fastly_save_image(img_x[i,3:].numpy(),'/path/to/user/NAS/gwx/code/seg_framer_v2/image_dsm'+str(i)+'.tif',gdal_type=gdal.GDT_Float32)
+#                 fastly_save_image(image_label[i].numpy()*255,'/path/to/user/NAS/gwx/code/seg_framer_v2/label'+str(i)+'.tif')
+#                 fastly_save_image(np.transpose(grid[i].numpy(),[2,0,1]),
+#                                     '/path/to/user/NAS/gwx/code/seg_framer_v2/grid'+str(i)+'.tif',gdal_type=gdal.GDT_Float32)
+
+#             for i in range(y2.shape[0]):
+#                 fastly_save_image(y2[i].numpy()*255,'/path/to/user/NAS/gwx/code/seg_framer_v2/xyz_label'+str(i)+'.tif')
+#                 fastly_save_image(xyz_x[i,0:3].numpy()*255,'/path/to/user/NAS/gwx/code/seg_framer_v2/xyz'+str(i)+'.tif',gdal_type=gdal.GDT_Float32)
+#                 fastly_save_image(xyz_x[i,3:].numpy(),'/path/to/user/NAS/gwx/code/seg_framer_v2/xyz_dsm'+str(i)+'.tif',gdal_type=gdal.GDT_Float32)
+#             break
+
+# if __name__=='__main__':
+#     # from data.datasets.data_utils import dataset_collate
+#     # import torch.utils.data as tdata 
+#     # import gdal
+#     # from utils.raster_io import fastly_save_image
+#     train_dataset=Dataset_DSM_Fusion_image_xyz(r"/path/to/project/ChenLabDataset\Penta-Cam-Centre\0_Penta_DeepL\Penta_IMG_MV\train\samples_dsm_512_512_512",
+#                                 r"/path/to/project/ChenLabDataset\Penta-Cam-Centre\0_Penta_DeepL\Penta_IMG_MV\train\samples_dsm_512_512_512\grid_none",
+#                                 r"/path/to/project/ChenLabDataset\Penta-Cam-Centre\0_Penta_DeepL\Penta_XYZ\train\samples_dsm_512_512_512",
+#                                 r"/path/to/project/ChenLabDataset\Penta-Cam-Centre\0_Penta_DeepL\XYZ_xy_name_map.txt",
+#                                 1,augmentation=False,standardization=False,dsm_none_value=-99999)#,indices_name='singleview_indices')
+#     train_views={}
+#     for i in train_dataset.views_meta:
+#         view_num=len(i)
+#         if view_num in train_views:
+#             train_views[view_num]+=view_num
+#         else:
+#             train_views[view_num]=view_num
+#     print(train_views)
+#     print(train_views.keys())
+    
+    # test_dataset=Dataset_DSM_Fusion_image_xyz("/path/to/user/NAS/gwx/DeepL/Xuzhou/IMG_MV/train/samples_none",
+    #                             "/path/to/user/NAS/gwx/DeepL/Xuzhou/IMG_MV/train/samples_none/grid_none",
+    #                             "/path/to/user/NAS/gwx/DeepL/Xuzhou/XYZ/train/samples_none",
+    #                             "/path/to/user/NAS/gwx/DeepL/Xuzhou/IMG_MV/XYZ_xy_name_map.txt",
+    #                             1,augmentation=False,standardization=False)#,indices_name='singleview_indices')
+    # test_views={}
+    # for i in test_dataset.views_meta:
+    #     view_num=len(i)
+    #     if view_num in test_views:
+    #         test_views[view_num]+=view_num
+    #     else:
+    #         test_views[view_num]=view_num

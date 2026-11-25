@@ -1,0 +1,130 @@
+# Frozen readout intervention using the original Q16 checkpoint, NOT retrained.
+# R scales match the actual historical checkpoint (res2/res3 despite allres name).
+# Use as a diagnostic; the frozen decoder was trained with projected values.
+# Fixed-Q16 inference for the TailLocal experiment.
+# Must use a checkpoint trained with:
+#   cfg_Hangzhou_Fusion_dinov3+upernet_sail_memory_attnr_allres_taillocal_res2res3_q16.yaml
+# The batch runner replaces indices_name, output_dir, ref_*_dir and devices for
+# each individual region.
+model:
+  in_channels: 3
+  out_channels: 1
+  type: EncoderDecoderCrossAttn
+  encoder:
+    type: DINOv3AdapterWrapper
+    model_name: vit_large
+    img_size: 512
+    patch_size: 16
+    out_indices: [5, 11, 17, 23]
+    checkpoint_path: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/dinov3_vitl16_pretrain_sat493m.pth
+  neck:
+    type: DINOv3ModifiedAdapterNeck
+    in_channels: 1024
+    embed_dim: 256
+    spatial_in_channels: 6
+  decoder:
+    type: UPerHead
+    in_channels: [256, 256, 256, 256]
+    out_channels: 256
+    dropout_ratio: 0.2
+  cross_attn:
+    fusion_type: sail_image_memory
+    attention_direction: anchor_to_tail
+    tail_aggregation: attention
+    tail_value_mode: raw_weighted  # weights only; unmodified pre-TailLocal values
+    embed_dim: 256
+    num_heads: 8
+    num_scales: 4
+    anchor_depth: 0
+    ffn_ratio: 2.0
+    dropout: 0.0
+    alpha_init: 0.05
+    tail_beta_init: 0.01
+    swin_r_enabled: false
+    multi_latent_swin_r_enabled: false
+    single_r_swin_set_enabled: true
+    single_r_swin_set_scales: [res2, res3]
+    single_r_spatial_window_size: 8
+    single_r_spatial_depth: 2
+    single_r_view_depth: 1
+    single_r_beta_init: 0.01
+    single_r_spatial_alpha_init: 0.01
+    tail_local_context_enabled: true
+    tail_local_context_scales: [res2, res3]
+    tail_local_context_kernel_size: 5
+    tail_local_context_bottleneck_ratio: 4
+    tail_local_context_dropout: 0.0
+    tail_local_context_alpha_init: 1.0
+    tail_local_context_chunk_size: 4
+    memory_eps: 1.0e-6
+  out_class: 1
+
+callback:
+  - type: FusionWriter
+    params:
+      output_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_allres_TailLocal_res2res3_q16/predict_raw_weighted_fixed16/0
+      ref_img_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/XYZ/Crop_0/image
+      ref_xyz_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/XYZ/Crop_0/image
+      num_class: 1
+      write_interval: epoch
+      save_prob: true
+      patch_only: false
+
+metric:
+  - type: F1Score
+    params: {task: binary}
+  - type: JaccardIndex
+    params: {task: binary, threshold: 0.5}
+  - type: Recall
+    params: {task: binary}
+  - type: Precision
+    params: {task: binary}
+
+trainer:
+  accelerator: gpu
+  devices: [0]
+  use_distributed_sampler: false
+  default_root_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_allres_TailLocal_res2res3_q16/predict_raw_weighted_fixed16/0
+
+# Replace after training. Strict loading deliberately prevents an accidental
+# architecture/checkpoint mismatch from silently producing predictions.
+predict_ckpt_path: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_allres_TailLocal_res2res3_q16/train/checkpoints/epoch=21-val_loss=0.0833-val_BinaryF1Score=0.9271.ckpt
+predict_strict_load: true
+predict_tdom_only: false
+feature_save_dir: null
+predict:
+  crop_stride: 360
+  crop_width: 512
+  crop_height: 512
+  threshold: 0.5
+
+PREDICT_DATALOADER_CFG:
+  batch_size: 1
+  num_workers: 0
+  shuffle: false
+  persistent_workers: false
+  pin_memory: false
+  collate_fn: sail_fusion_collate
+
+PREDICT_DATASET_CFG:
+  type: Dataset_DSM_Fusion_RGB_DSM_SAILMemory
+  augmentation: true
+  standardization: false
+  anchor_data_dir: /path/to/cache/anchors_coverage_medoid_test/k5
+  raw_feat_data_dir: /path/to/cache/feature_crop_pre_v3
+  xyz_data_dir: /path/to/project/Data/Hangzhou/samples_crop_512_512_360
+  # run_cam1_predict_batch.py replaces this with test_<region>_indices.
+  indices_name: test_0_indices
+  xyz_dsm_none_value: -99999
+  num_anchors: 5
+  tail_count: 16
+  tail_sampling: fixed
+  view_index_path: /path/to/cache/sail_indices/test_0-10_full_views.json
+  auto_build_index: false
+  missing_anchor_policy: tdom_only
+  strict: false
+  data_pipeline:
+    - type: Normalize
+      mean: [0.430, 0.411, 0.296]
+      std: [0.213, 0.156, 0.143]
+      max_pixel_value: 1.0

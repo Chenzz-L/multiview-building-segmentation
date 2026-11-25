@@ -1,0 +1,3 @@
+# CPU core fusion tests only; not the full geospatial/model-training environment.
+torch==2.7.1
+numpy>=1.24,<3

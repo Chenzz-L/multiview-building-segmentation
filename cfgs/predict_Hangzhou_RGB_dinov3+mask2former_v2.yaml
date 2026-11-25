@@ -1,0 +1,99 @@
+model:
+  in_channels: 3
+  out_channels: 1
+  type: EncoderDecoder
+  encoder: &encoder
+    type: DINOv3AdapterWrapper
+    model_name: "vit_large"
+    img_size: 512
+    patch_size: 16
+    out_indices: [5, 11, 17, 23]
+    checkpoint_path: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/dinov3_vitl16_pretrain_sat493m.pth
+  neck:
+    type: ViTAdapterNeck
+    in_channels: 1024 
+    embed_dim: 1024      
+    img_size: 512
+    # out_channels: 256
+    patch_size: 16
+    in_chans: 4     
+    interaction_indexes: [0, 1, 2, 3] 
+    with_cffn: True
+    cffn_ratio: 0.25
+  pixel_decoder:
+    transformer_dropout: 0.2
+    transformer_nheads: 8
+    transformer_dim_feedforward: 1024
+    transformer_enc_layers: 6
+    conv_dim: 256   
+    mask_dim: 256   
+    norm: "GN"     
+    transformer_in_features: ["res3", "res4", "res5"] 
+    common_stride: 2
+  decoder:
+    type: MultiScaleMaskedTransformerDecoder
+    in_channels: 256
+    num_classes: 1
+    hidden_dim: 256
+    mask_dim: 256
+    num_queries: 50
+    nheads: 8
+    dim_feedforward: 2048
+    dec_layers: 6
+    pre_norm: False
+    enforce_input_project: False
+  out_class: 1
+callback:
+ - type: NormalWriter
+   params:
+    output_dir : /path/to/project/experiment/MVMapper/Hangzhou_XYZ_DSM_newinstencedata_testdata6_512_dinov3_pixel_decoder_mask2former_Lora_lr1e-4_adpetv2_centers/predict_instance_noover
+    ref_dir : /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/Data_for_Try/test_6/Crop/image
+    num_class : 1
+    write_interval : batch_and_epoch
+metric:
+  - type: F1Score
+    params:
+     task : binary
+  - type : IoU
+    params:
+     num_classes: 2
+  - type : Recall
+    params:
+     task : binary
+  - type : Precision
+    params:
+     task : binary
+trainer:
+  accelerator: gpu
+  devices: [0]
+  # strategy: ddp
+  # precision: 16-mixed
+  # max_epochs: 1
+  # check_val_every_n_epoch: 1
+  use_distributed_sampler: False
+  # sync_batchnorm: True
+  default_root_dir: /path/to/project/experiment/MVMapper/Hangzhou_XYZ_DSM_newinstencedata_testdata6_512_dinov3_pixel_decoder_mask2former_Lora_lr1e-4_adpetv2_centers/predict_instance_noover
+  # fast_dev_run: True
+predict:
+  crop_stride: 360
+  crop_width : 512
+  crop_height : 512
+  threshold: 0.5
+PREDICT_DATALOADER_CFG:
+  batch_size: 1
+  num_workers: 0
+  shuffle: false
+  persistent_workers : false
+  pin_memory: false
+PREDICT_DATASET_CFG:
+  augmentation: false
+  standardization: true
+  data_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/Data_for_Try/test_6/Crop
+  data_pipeline: Null
+  type: Inference_dataset_RGB_DSM_COCO_Simple
+  dsm_dir_name: dsm
+  dsm_none_value: -99999
+  image_dir_name: image
+  json_name: test_3_5_6.json
+  label_dir_name: label
+  mask: true

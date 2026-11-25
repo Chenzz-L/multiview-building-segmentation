@@ -1,0 +1,161 @@
+# Optional training experiment; prepared only, not launched.
+# TailLocal is retained in K/weight computation, not in the pooled Values.
+# Same baseline splits/random-Q/loss/optimizer; output directory is separate.
+# Do not treat frozen-checkpoint intervention metrics as retrained performance.
+# Controlled tail-context ablation.
+# R: unchanged historical checkpoint architecture; SwinSet on res2/res3.
+# Tail: each sampled tail independently receives a lightweight local CNN on
+# res2/res3, then enters the unchanged same-pixel R-query tail attention.
+model:
+  in_channels: 3
+  out_channels: 1
+  type: EncoderDecoderCrossAttn
+  encoder:
+    type: DINOv3AdapterWrapper
+    model_name: vit_large
+    img_size: 512
+    patch_size: 16
+    out_indices: [5, 11, 17, 23]
+    checkpoint_path: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/dinov3_vitl16_pretrain_sat493m.pth
+  neck: {type: DINOv3ModifiedAdapterNeck, in_channels: 1024, embed_dim: 256, spatial_in_channels: 6}
+  decoder:
+    type: UPerHead
+    in_channels: [256, 256, 256, 256]
+    out_channels: 256
+    dropout_ratio: 0.2
+  cross_attn:
+    fusion_type: sail_image_memory
+    attention_direction: anchor_to_tail
+    tail_aggregation: attention
+    tail_value_mode: raw_weighted  # Q/K weights only; pre-TailLocal raw values
+    embed_dim: 256
+    num_heads: 8
+    num_scales: 4
+    anchor_depth: 0
+    ffn_ratio: 2.0
+    dropout: 0.0
+    alpha_init: 0.05
+    tail_beta_init: 0.01
+    swin_r_enabled: false
+    multi_latent_swin_r_enabled: false
+    single_r_swin_set_enabled: true
+    single_r_swin_set_scales: [res2, res3]
+    single_r_spatial_window_size: 8
+    single_r_spatial_depth: 2
+    single_r_view_depth: 1
+    single_r_beta_init: 0.01
+    single_r_spatial_alpha_init: 0.01
+    # The only new module in this experiment. One block is shared by every
+    # tail; it has no tail-to-tail attention and preserves T_i at init.
+    tail_local_context_enabled: true
+    tail_local_context_scales: [res2, res3]
+    tail_local_context_kernel_size: 5
+    tail_local_context_bottleneck_ratio: 4
+    tail_local_context_dropout: 0.0
+    tail_local_context_alpha_init: 1.0
+    tail_local_context_chunk_size: 4
+    memory_eps: 1.0e-6
+  out_class: 1
+
+optimizer: {lr: 0.00005, type: AdamW, weight_decay: 0.1}
+lr_scheduler: {type: CosineAnnealingLR, T_max: 40, eta_min: 0.000001}
+loss:
+  - type: SigmoidDiceLoss
+    params: {loss_weight: 1.0}
+  - type: FocalLoss
+    params: {gamma: 2.0, alpha: 0.5, loss_weight: 1.0}
+metric:
+  - type: F1Score
+    params: {task: binary}
+  - type: JaccardIndex
+    params: {task: binary, threshold: 0.5}
+  - type: Recall
+    params: {task: binary}
+background_consistency: {enabled: false}
+view_supervision: {enabled: false}
+
+callback:
+  - type: ModelCheckpoint
+    params:
+      monitor: val_BinaryF1Score
+      mode: max
+      dirpath: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_TailLocal_RawWeighted_q16/train/checkpoints
+      filename: '{epoch}-{val_loss:.4f}-{val_BinaryF1Score:.4f}'
+      save_top_k: 3
+      save_on_train_epoch_end: false
+logger:
+  - type: CSVLogger
+    params:
+      save_dir: &save_dir /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_TailLocal_RawWeighted_q16/train/logs
+      name: &name Hangzhou_SAILMemory_AttnR_TailLocal_RawWeighted_q16
+      flush_logs_every_n_steps: 10
+      version: csv
+  - type: TensorBoardLogger
+    params: {save_dir: *save_dir, name: *name, version: tensorboard}
+
+trainer:
+  accelerator: gpu
+  devices: [4, 5,6]
+  max_epochs: 40
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: /path/to/nas/mvmapper_datamake/0_Hangzhou_v2/experiment/Hangzhou_SAILMemory_AttnR_TailLocal_RawWeighted_q16
+
+TRAIN_DATALOADER_CFG:
+  batch_size: 2
+  num_workers: 0
+  shuffle: true
+  persistent_workers: false
+  pin_memory: false
+  collate_fn: sail_fusion_collate
+TRAIN_DATASET_CFG:
+  type: Dataset_DSM_Fusion_RGB_DSM_SAILMemory
+  augmentation: true
+  standardization: false
+  anchor_data_dir: /path/to/cache/anchors_coverage_medoid_train/k5
+  raw_feat_data_dir: /path/to/cache/feature_v3
+  xyz_data_dir: /path/to/project/Data/Hangzhou/samples_crop_512_512_360
+  indices_name: train_6_7_17_30_indices
+  xyz_dsm_none_value: -99999
+  num_anchors: 5
+  tail_count: 16
+  tail_count_choices: [4, 8, 12, 16]
+  tail_sampling: random
+  view_index_path: /path/to/cache/sail_indices/train_6_7_17_30_views.json
+  auto_build_index: false
+  missing_anchor_policy: drop
+  strict: true
+  data_pipeline:
+    - type: Normalize
+      mean: [0.430, 0.411, 0.296]
+      std: [0.213, 0.156, 0.143]
+      max_pixel_value: 1.0
+
+VAL_DATALOADER_CFG:
+  batch_size: 2
+  num_workers: 0
+  shuffle: false
+  persistent_workers: false
+  pin_memory: false
+  collate_fn: sail_fusion_collate
+VAL_DATASET_CFG:
+  type: Dataset_DSM_Fusion_RGB_DSM_SAILMemory
+  augmentation: true
+  standardization: false
+  anchor_data_dir: /path/to/cache/anchors_coverage_medoid_test/k5
+  raw_feat_data_dir: /path/to/cache/feature_crop_pre_v3
+  xyz_data_dir: /path/to/project/Data/Hangzhou/samples_crop_512_512_360
+  indices_name: test_0-10_indices_downsampled
+  xyz_dsm_none_value: -99999
+  num_anchors: 5
+  tail_count: 8
+  tail_sampling: fixed
+  view_index_path: /path/to/cache/sail_indices/test_0-10_views.json
+  auto_build_index: false
+  missing_anchor_policy: drop
+  strict: true
+  data_pipeline:
+    - type: Normalize
+      mean: [0.430, 0.411, 0.296]
+      std: [0.213, 0.156, 0.143]
+      max_pixel_value: 1.0
