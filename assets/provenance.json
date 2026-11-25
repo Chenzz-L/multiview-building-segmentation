@@ -1,0 +1,40 @@
+{
+  "prepared_on": "2026-11-25",
+  "manuscript": {
+    "filename": "information_fusion_manuscript.tex",
+    "sha256": "b482be5aa807f39c1b730f193784c8104563335145a5fc76472322bb8cc2104d",
+    "table_labels": [
+      "tab:main",
+      "tab:mapping",
+      "tab:fusion"
+    ],
+    "status": "Author-supplied draft; reported experiments, not rerun for this release"
+  },
+  "cross_check": {
+    "source_relative_path": "result/结果目录说明_20261027.md",
+    "sha256": "f69babfbc0d2fa578398ce9e9c4cd5c79617e8f42256e0f7151d551706d65272"
+  },
+  "figures": [
+    {
+      "published_file": "assets/overall_framework.png",
+      "source_relative_path": "figures/method/overall_framework.pdf",
+      "source_sha256": "b96f4ac8270a24797884d79da65ee1b279bdd02c509ffd307e41fa6a8c601f0f",
+      "published_sha256": "9b38ce00053747e601c62116677ea4f6c1bed9e1148174209d64d19a6ff2a9df",
+      "operation": "Poppler page 1 PNG rendering; longest side 2400 px"
+    },
+    {
+      "published_file": "assets/main_results_six_selected.png",
+      "source_relative_path": "figures/experiments/main_results_six_selected.png",
+      "source_sha256": "b0fdea0f031131ac998c474992290dd8433a0cae83905aefc356fc708f727938",
+      "published_sha256": "b0fdea0f031131ac998c474992290dd8433a0cae83905aefc356fc708f727938",
+      "operation": "Unmodified copy"
+    },
+    {
+      "published_file": "assets/mapping_p0_p3_five_cases.png",
+      "source_relative_path": "figures/experiments/mapping_p0_p3_five_cases.png",
+      "source_sha256": "e6a81a467bdd69e0a96a5bc6cf484177d8eba406bbba7ce72dfb77dfee5b89a3",
+      "published_sha256": "e6a81a467bdd69e0a96a5bc6cf484177d8eba406bbba7ce72dfb77dfee5b89a3",
+      "operation": "Unmodified copy"
+    }
+  ]
+}

@@ -1,24 +1,42 @@
-# Multi-view Building Segmentation
+# Multi-view Building Segmentation · SUAM + RMMF
 
-面向倾斜航空影像的多视特征融合与建筑物分割研究代码。包含 DINOv3 特征适配、Mask2Former 实例分割分支、DSM/空间数据处理，以及关键视角引导的 SAIL-style 分层融合模块。
+面向五镜头倾斜摄影的建筑物提取研究代码：通过 **SUAM（结构单元约束仿射映射）**将多视像方特征对齐至物方，再通过 **RMMF（代表性记忆引导的多视融合）**整合代表视图与补充观测，输出物方建筑物分割结果。
+
+论文初稿报告：杭州数据集上 **IoU 87.36%、F1 93.25%**，相比 MVMapper 分别提高 **2.23、1.28 个百分点**。这些是已有实验记录，并非此次仓库整理重新训练得到的结果。
 
 **Built with DINOv3.** DINOv3、Mask2Former 及其他第三方组件的归属和许可证见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
-```mermaid
-flowchart LR
- A[多视航空影像] --> B[DINOv3 特征 / 实例分割分支]
- C[DSM 与空间映射] --> D[对齐的多视特征]
- B --> D
- D --> E[关键视角交互]
- D --> F[其余视角特征]
- E --> G[分层注意力与流式聚合]
- F --> G
- G --> H[分割解码与评测]
-```
+## 方法概览
+
+![SUAM 与 RMMF 建筑物提取框架](assets/overall_framework.png)
+
+1. **像方表征与实例预测**：利用 DINOv3 特征和 Mask2Former 实例分支获取像方特征及结构单元预测。
+2. **SUAM 几何对齐**：结合相机参数与 DSM 建立对应点，保留结构单元实例身份，分别拟合局部仿射变换并限制作用范围，减少相邻结构共用映射参数的问题。
+3. **RMMF 多视融合**：选取 K 个真实代表视图构建记忆 R，由 R 查询轻量编码的补充观测，形成增强记忆 M。这里 Q 来自 R，K/V 来自补充视图。
+4. **物方分割**：将 M 与 TDOM、DSM 提供的物方特征融合，经 UPerNet 解码得到建筑物掩膜。
+
+五个镜头类别不等于每个样本仅有五张影像；记忆 R 表示空间多视信息，不是时序历史状态。详细方法及代码对应关系见 [方法说明](docs/METHOD.md)。
+
+## 实验结果
+
+下表摘自论文初稿主实验，指标单位为 %；SUAM + RMMF 使用 K=5、补充视图预算 T=96。
+
+| 方法 | IoU | F1 | Precision | Recall |
+|---|---:|---:|---:|---:|
+| 物方模型 | 83.39 | 90.95 | 92.12 | 89.80 |
+| 结果级多视融合 | 79.42 | 88.53 | 84.99 | 92.38 |
+| MVMapper | 85.13 | 91.97 | 92.45 | 91.49 |
+| **SUAM + RMMF** | **87.36** | **93.25** | **95.02** | 91.55 |
+
+![六组建筑物分割结果对比](assets/main_results_six_selected.png)
+
+从左至右为区域概览、TDOM 与真值轮廓、物方模型、结果级融合、MVMapper 和本文方法。绿色为正确检出，红色为误检，蓝色为漏检，白色为正确背景；第二列白线为真值轮廓。局部示例与全测试区域的汇总指标应结合阅读。
+
+映射消融中，P3 相比 P2 的 **F1 提高 2.38 个百分点**；融合对照中，RMMF 相比 Masked Mean 的 **F1 提高 1.02 个百分点**。二者使用不同对照，不能混称为同一项增益。完整表格、设置和来源见 [实验说明](docs/RESULTS.md)。
 
 ## 主要实现
 
-- `layers/sail_image_memory.py`：关键视角上下文、anchor/tail 注意力与分块流式融合。
+- `layers/sail_image_memory.py`：代表视图上下文、anchor/tail 注意力与分块流式融合；保留历史文件命名。
 - `layers/single_r_swin_set.py`、`layers/tail_local_context.py`：视角和局部空间上下文模块。
 - `models/normal_model_interface_dinov3_mask2former.py`：DINOv3 + Mask2Former 分支。
 - `models/fusion_model_interface_dinov3_crossattn.py`：多视特征融合训练接口。
@@ -58,8 +76,9 @@ python main_multi_q_predict.py -cfg YOUR_PREDICTION_CONFIG
 
 ## 结果与复现状态
 
-本仓库发布真实实现、配置示例和模块测试。尚未在本次整理中核实与简历“F1 提升 2.4 个百分点”一一对应的基线、配置、数据划分和权重，因此不将该数值列为仓库可复现的 benchmark。
-航空数据和训练权重未随源码发布，完整训练/实例分割流水线未在此次发布检查中重跑。模块检查的实际结果见 [VALIDATION.md](VALIDATION.md)。
+本仓库发布研究实现、配置示例、模块测试，以及经论文初稿和已有结果目录交叉核对的实验摘要与原始图件。图件来源和文件校验信息见 [assets/README.md](assets/README.md)。
+
+航空数据、缓存特征和训练权重未随源码发布；完整预处理、训练与全量评测尚未在此次发布检查中重跑，也尚未建立每张结果表与公开配置、检查点的一一对应关系。因此，上述表格属于 **manuscript-reported results**，不是一键复现承诺。模块检查的实际结果见 [VALIDATION.md](VALIDATION.md)。
 
 ## 上游项目
 
